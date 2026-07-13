@@ -15,8 +15,6 @@ import ReceiptPreview from '@/components/receipt/ReceiptPreview';
 import { ReceiptData, TemplateType } from '@/lib/types';
 import { templates, getTemplate } from '@/lib/templates';
 import { generateReceiptText } from '@/lib/utils';
-import type { toPng } from 'html-to-image';
-
 function escapeHTML(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -25,18 +23,36 @@ function escapeHTML(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-async function captureReceipt(
-  node: HTMLElement,
-  toPngFn: typeof toPng
-): Promise<string> {
-  return toPngFn(node, {
+async function waitForFonts() {
+  try {
+    await document.fonts.ready;
+  } catch {
+    // fallback: wait 300ms for fonts
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+async function captureReceipt(node: HTMLElement): Promise<string> {
+  await waitForFonts();
+
+  const { toPng } = await import('html-to-image');
+
+  return toPng(node, {
     pixelRatio: 2,
     backgroundColor: '#ffffff',
     cacheBust: true,
-    style: {
-      transform: 'none',
-    },
+    skipAutoScale: false,
+    includeQueryParams: true,
   });
+}
+
+function downloadFile(dataUrl: string, filename: string) {
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = dataUrl;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export default function PreviewPage() {
@@ -66,8 +82,7 @@ export default function PreviewPage() {
     if (!receiptInner) return;
 
     try {
-      const { toPng } = await import('html-to-image');
-      const dataUrl = await captureReceipt(receiptInner, toPng);
+      const dataUrl = await captureReceipt(receiptInner);
 
       const printWindow = window.open('', '_blank');
       if (!printWindow) {
@@ -110,15 +125,8 @@ export default function PreviewPage() {
     setIsExporting(true);
 
     try {
-      const { toPng } = await import('html-to-image');
-      const dataUrl = await captureReceipt(receiptInner, toPng);
-
-      const link = document.createElement('a');
-      link.download = `Struk-${data?.transaction.orderId || 'receipt'}.png`;
-      link.href = dataUrl;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const dataUrl = await captureReceipt(receiptInner);
+      downloadFile(dataUrl, `Struk-${data?.transaction.orderId || 'receipt'}.png`);
     } catch (err) {
       console.error('Export PNG failed:', err);
       alert('Gagal export PNG. Silakan coba lagi.');
@@ -135,27 +143,27 @@ export default function PreviewPage() {
     setIsExporting(true);
 
     try {
-      const [{ toPng }, { default: jsPDF }] = await Promise.all([
-        import('html-to-image'),
+      const [{ jsPDF }] = await Promise.all([
         import('jspdf'),
       ]);
 
-      const dataUrl = await captureReceipt(receiptInner, toPng);
+      const dataUrl = await captureReceipt(receiptInner);
 
       const img = new Image();
       img.src = dataUrl;
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Failed to load image'));
       });
 
-      const pxW = img.width;
-      const pxH = img.height;
+      const pxW = img.naturalWidth;
+      const pxH = img.naturalHeight;
 
       const pdfW = 80;
       const pdfH = (pxH / pxW) * pdfW;
 
       const pdf = new jsPDF({
-        orientation: pdfH > pdfW ? 'portrait' : 'portrait',
+        orientation: 'portrait',
         unit: 'mm',
         format: [pdfW, pdfH],
       });
